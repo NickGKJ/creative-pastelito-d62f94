@@ -9,3 +9,6 @@
 
 /manifest.webmanifest
   Cache-Control: no-cache, must-revalidate
+
+/sync.js
+  Cache-Control: no-cache, no-store, must-revalidate
