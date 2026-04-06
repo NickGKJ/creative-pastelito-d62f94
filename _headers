@@ -4,7 +4,7 @@
 /index.html
   Cache-Control: no-cache, must-revalidate
 
-/registerSW.js
+/registersw.js
   Cache-Control: no-cache, must-revalidate
 
 /manifest.webmanifest
