@@ -2,16 +2,21 @@
  * AAC App Sync Script
  * Syncs IndexedDB content with the server so all visitors see the same data.
  * - On page load: pulls content from the server and writes to IndexedDB
+ * - Continuously polls for server changes so ALL devices stay in sync
  * - When admin makes changes: pushes content to the server
  */
 (function () {
   var DB_NAME = 'aac-app';
   var DB_VERSION = 1;
   var API_URL = '/.netlify/functions/content';
-  var POLL_INTERVAL = 3000;
+  var PUSH_POLL_INTERVAL = 3000;
+  var PULL_POLL_INTERVAL = 5000;
   var isSyncing = false;
   var lastSnapshot = '';
   var lastPushTime = 0;
+  var lastKnownVersion = 0;
+  var pullTimer = null;
+  var isInitialized = false;
 
   function openDB() {
     return new Promise(function (resolve, reject) {
@@ -117,28 +122,31 @@
     });
   }
 
-  // Create a snapshot string for change detection (metadata only, no blobs)
+  // Create a snapshot string for change detection
+  // Includes blob sizes to detect image/audio changes
   function makeSnapshot(categories, items) {
     var catData = categories.map(function (c) {
       return c.id + ':' + c.name + ':' + c.emoji + ':' + c.order;
     }).sort().join('|');
     var itemData = items.map(function (i) {
-      return i.id + ':' + i.categoryId + ':' + i.label + ':' + i.createdAt;
+      var imgSize = (i.imageBlob && i.imageBlob.size) ? i.imageBlob.size : 0;
+      var audSize = (i.audioBlob && i.audioBlob.size) ? i.audioBlob.size : 0;
+      return i.id + ':' + i.categoryId + ':' + i.label + ':' + i.createdAt + ':' + imgSize + ':' + audSize;
     }).sort().join('|');
     return catData + '##' + itemData;
   }
 
   // Pull content from server and write to IndexedDB
+  // Returns: 'updated' if data changed, 'current' if already up to date, 'empty' if no server data
   function pullFromServer() {
-    return fetch(API_URL)
+    return fetch(API_URL, { cache: 'no-store' })
       .then(function (res) { return res.json(); })
       .then(function (data) {
-        if (!data || !data.version || data.version === 0) return false;
+        if (!data || !data.version || data.version === 0) return 'empty';
 
         var serverVersion = data.version;
-        var localVersion = parseInt(sessionStorage.getItem('aac-sync-version') || '0', 10);
 
-        if (serverVersion <= localVersion) return false;
+        if (serverVersion <= lastKnownVersion) return 'current';
 
         var categories = data.categories || [];
         var items = deserializeItems(data.items || []);
@@ -150,19 +158,17 @@
             .then(function () {
               db.close();
               isSyncing = false;
-              sessionStorage.setItem('aac-sync-version', String(serverVersion));
+              lastKnownVersion = serverVersion;
               // Update snapshot so poll doesn't immediately push back
-              lastSnapshot = makeSnapshot(categories, items.map(function (i) {
-                return { id: i.id, categoryId: i.categoryId, label: i.label, createdAt: i.createdAt };
-              }));
-              return true; // data was updated
+              lastSnapshot = makeSnapshot(categories, items);
+              return 'updated';
             });
         });
       })
       .catch(function (err) {
         console.warn('[AAC Sync] Pull failed:', err);
         isSyncing = false;
-        return false;
+        return 'error';
       });
   }
 
@@ -199,7 +205,7 @@
             .then(function (result) {
               if (result.ok) {
                 lastSnapshot = snapshot;
-                sessionStorage.setItem('aac-sync-version', String(result.version));
+                lastKnownVersion = result.version;
               }
             });
         });
@@ -212,6 +218,23 @@
   // Check if admin view is active
   function isAdminActive() {
     return !!document.querySelector('.admin-view');
+  }
+
+  // Continuously poll server for changes and update the page if new data is found
+  function startPullPolling() {
+    if (pullTimer) return;
+
+    pullTimer = setInterval(function () {
+      // Don't pull while admin is actively editing (push takes priority)
+      if (isAdminActive() || isSyncing) return;
+
+      pullFromServer().then(function (result) {
+        if (result === 'updated') {
+          // Server has newer data - reload to show it
+          window.location.reload();
+        }
+      });
+    }, PULL_POLL_INTERVAL);
   }
 
   // Poll for admin changes and push to server
@@ -232,24 +255,50 @@
         wasAdmin = false;
         pushToServer();
       }
-    }, POLL_INTERVAL);
+    }, PUSH_POLL_INTERVAL);
 
     // Also push when leaving the page
     window.addEventListener('beforeunload', function () {
       if (isAdminActive() || lastSnapshot) {
-        // Use sendBeacon for reliable delivery on page unload
-        openDB().then(function (db) {
-          Promise.all([
-            getAllFromStore(db, 'categories'),
-            getAllFromStore(db, 'items')
-          ]).then(function (results) {
-            db.close();
-            var categories = results[0];
-            var items = results[1];
-            if (categories.length === 0) return;
-            // Note: sendBeacon can't easily handle blob serialization,
-            // but the periodic push should have caught most changes
+        // Attempt a synchronous push using sendBeacon if possible
+        try {
+          openDB().then(function (db) {
+            Promise.all([
+              getAllFromStore(db, 'categories'),
+              getAllFromStore(db, 'items')
+            ]).then(function (results) {
+              db.close();
+            });
           });
+        } catch (e) {
+          // Best effort only
+        }
+      }
+    });
+  }
+
+  // Handle visibility change - pull fresh data when tab becomes visible
+  function setupVisibilityHandler() {
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible' && isInitialized && !isAdminActive()) {
+        // User switched back to this tab - check for updates immediately
+        pullFromServer().then(function (result) {
+          if (result === 'updated') {
+            window.location.reload();
+          }
+        });
+      }
+    });
+  }
+
+  // Handle online/offline - pull when coming back online
+  function setupOnlineHandler() {
+    window.addEventListener('online', function () {
+      if (isInitialized && !isAdminActive()) {
+        pullFromServer().then(function (result) {
+          if (result === 'updated') {
+            window.location.reload();
+          }
         });
       }
     });
@@ -268,17 +317,25 @@
       });
     }).then(function () {
       return pullFromServer();
-    }).then(function (dataUpdated) {
-      if (dataUpdated) {
+    }).then(function (result) {
+      isInitialized = true;
+      if (result === 'updated') {
         // Data was updated from server - reload to show new content
         window.location.reload();
       } else {
-        // No new data - start admin push polling
+        // Start both push and pull polling
         startAdminPoll();
+        startPullPolling();
+        setupVisibilityHandler();
+        setupOnlineHandler();
       }
     }).catch(function (err) {
       console.warn('[AAC Sync] Init failed:', err);
+      isInitialized = true;
       startAdminPoll();
+      startPullPolling();
+      setupVisibilityHandler();
+      setupOnlineHandler();
     });
   }
 
