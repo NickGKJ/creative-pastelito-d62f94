@@ -1,0 +1,99 @@
+import React, { createContext, useContext, useReducer, useEffect } from 'react';
+import { getCategories, getSetting, setSetting, initDefaults } from './db';
+
+// ── State shape ───────────────────────────────────────────────────────────────
+const initialState = {
+  view: 'loading',          // 'loading' | 'firstLaunch' | 'child' | 'pinEntry' | 'admin'
+  categories: [],
+  currentCategoryId: null,
+  displaySize: 'medium',    // 'small' | 'medium' | 'large'
+  isInitialised: false,
+};
+
+// ── Reducer ───────────────────────────────────────────────────────────────────
+function reducer(state, action) {
+  switch (action.type) {
+    case 'INIT':
+      return {
+        ...state,
+        view: action.view,
+        categories: action.categories,
+        currentCategoryId: action.categories[0]?.id ?? null,
+        displaySize: action.displaySize,
+        isInitialised: true,
+      };
+    case 'SET_VIEW':
+      return { ...state, view: action.view };
+    case 'SET_CATEGORIES':
+      return {
+        ...state,
+        categories: action.categories,
+        currentCategoryId:
+          action.categories.find(c => c.id === state.currentCategoryId)
+            ? state.currentCategoryId
+            : action.categories[0]?.id ?? null,
+      };
+    case 'SET_CURRENT_CATEGORY':
+      return { ...state, currentCategoryId: action.id };
+    case 'SET_DISPLAY_SIZE':
+      return { ...state, displaySize: action.size };
+    default:
+      return state;
+  }
+}
+
+// ── Context ───────────────────────────────────────────────────────────────────
+const AppContext = createContext(null);
+
+export function AppProvider({ children }) {
+  const [state, dispatch] = useReducer(reducer, initialState);
+
+  useEffect(() => {
+    async function init() {
+      const pin = await getSetting('adminPin');
+      if (!pin) {
+        // First launch — no defaults yet
+        dispatch({ type: 'INIT', view: 'firstLaunch', categories: [], displaySize: 'medium' });
+        return;
+      }
+      await initDefaults();
+      const categories = await getCategories();
+      const displaySize = (await getSetting('displaySize')) ?? 'medium';
+      dispatch({ type: 'INIT', view: 'child', categories, displaySize });
+    }
+    init();
+  }, []);
+
+  const actions = {
+    setView: (view) => dispatch({ type: 'SET_VIEW', view }),
+
+    refreshCategories: async () => {
+      const categories = await getCategories();
+      dispatch({ type: 'SET_CATEGORIES', categories });
+    },
+
+    setCurrentCategory: (id) => dispatch({ type: 'SET_CURRENT_CATEGORY', id }),
+
+    setDisplaySize: async (size) => {
+      await setSetting('displaySize', size);
+      dispatch({ type: 'SET_DISPLAY_SIZE', size });
+    },
+
+    completeFirstLaunch: async () => {
+      await initDefaults();
+      const categories = await getCategories();
+      const displaySize = (await getSetting('displaySize')) ?? 'medium';
+      dispatch({ type: 'INIT', view: 'admin', categories, displaySize });
+    },
+  };
+
+  return (
+    <AppContext.Provider value={{ state, actions }}>
+      {children}
+    </AppContext.Provider>
+  );
+}
+
+export function useApp() {
+  return useContext(AppContext);
+}
