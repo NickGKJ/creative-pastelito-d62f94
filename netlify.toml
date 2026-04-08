@@ -3,4 +3,4 @@
   publish = "dist"
 
   [build.environment]
-    SECRETS_SCAN_SMART_DETECTION_OMIT_VALUES = "true"
+    SECRETS_SCAN_SMART_DETECTION_ENABLED = "false"
