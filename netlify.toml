@@ -4,6 +4,7 @@
 
   [build.environment]
     SECRETS_SCAN_SMART_DETECTION_ENABLED = "false"
+    NODE_VERSION = "20"
 
 [functions]
   directory = "netlify/functions"
