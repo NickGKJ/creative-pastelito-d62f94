@@ -1,13 +1,12 @@
 // Serves binary files (images + audio) stored by upload.js.
-// Files are cached by the browser and CDN for a full year since
-// the content never changes for a given ID.
+import { getStore } from "@netlify/blobs";
 
-const { getStore } = require("@netlify/blobs");
+export default async (req) => {
+  const url = new URL(req.url);
+  const id = url.searchParams.get("id");
 
-exports.handler = async (event) => {
-  const { id } = event.queryStringParameters || {};
   if (!id) {
-    return { statusCode: 400, body: "Missing id parameter" };
+    return new Response("Missing id parameter", { status: 400 });
   }
 
   const store = getStore("aac-files");
@@ -16,25 +15,22 @@ exports.handler = async (event) => {
     const result = await store.getWithMetadata(id, { type: "arrayBuffer" });
 
     if (!result) {
-      return { statusCode: 404, body: "File not found" };
+      return new Response("File not found", { status: 404 });
     }
 
     const contentType =
       result.metadata?.contentType || "application/octet-stream";
 
-    return {
-      statusCode: 200,
+    return new Response(result.data, {
+      status: 200,
       headers: {
         "Content-Type": contentType,
-        // Files are immutable — same ID always means same content.
         "Cache-Control": "public, max-age=31536000, immutable",
         "Access-Control-Allow-Origin": "*",
       },
-      body: Buffer.from(result.data).toString("base64"),
-      isBase64Encoded: true,
-    };
+    });
   } catch (e) {
     console.error("[file] error:", e);
-    return { statusCode: 404, body: "File not found" };
+    return new Response("File not found", { status: 404 });
   }
 };

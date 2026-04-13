@@ -1,73 +1,57 @@
-// Receives binary file uploads from the admin, stores them in Netlify Blobs,
-// and returns a URL that the file.js function will serve.
-
-const { getStore } = require("@netlify/blobs");
+// Binary file upload — stores files in Netlify Blobs, returns a serve URL.
+import { getStore } from "@netlify/blobs";
 
 const STORE = "aac-files";
-
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, X-File-Type",
   "Access-Control-Allow-Methods": "POST, DELETE, OPTIONS",
 };
 
-exports.handler = async (event) => {
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: CORS, body: "" };
+export default async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS });
   }
 
+  const url = new URL(req.url);
+  const id = url.searchParams.get("id");
   const store = getStore(STORE);
-  const { id } = event.queryStringParameters || {};
 
   try {
     // ── Upload ────────────────────────────────────────────────────────────────
-    if (event.httpMethod === "POST") {
+    if (req.method === "POST") {
       const fileId =
-        id ||
-        `f-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
+        id || `f-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const contentType =
-        event.headers["x-file-type"] ||
-        event.headers["X-File-Type"] ||
-        "application/octet-stream";
+        req.headers.get("x-file-type") || "application/octet-stream";
 
-      const buf = event.isBase64Encoded
-        ? Buffer.from(event.body, "base64")
-        : Buffer.from(event.body || "", "binary");
-
+      const buf = await req.arrayBuffer();
       await store.set(fileId, buf, { metadata: { contentType } });
 
-      return {
-        statusCode: 200,
-        headers: { "Content-Type": "application/json", ...CORS },
-        body: JSON.stringify({
+      return new Response(
+        JSON.stringify({
           id: fileId,
           url: `/.netlify/functions/file?id=${encodeURIComponent(fileId)}`,
         }),
-      };
+        { status: 200, headers: { "Content-Type": "application/json", ...CORS } }
+      );
     }
 
     // ── Delete ────────────────────────────────────────────────────────────────
-    if (event.httpMethod === "DELETE" && id) {
-      try {
-        await store.delete(id);
-      } catch {
-        /* already gone — not an error */
-      }
-      return {
-        statusCode: 200,
+    if (req.method === "DELETE" && id) {
+      try { await store.delete(id); } catch { /* already gone */ }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
         headers: { "Content-Type": "application/json", ...CORS },
-        body: JSON.stringify({ ok: true }),
-      };
+      });
     }
 
-    return { statusCode: 405, headers: CORS, body: "Method not allowed" };
+    return new Response("Method not allowed", { status: 405, headers: CORS });
   } catch (e) {
     console.error("[upload] error:", e);
-    return {
-      statusCode: 500,
+    return new Response(JSON.stringify({ error: e.message }), {
+      status: 500,
       headers: { "Content-Type": "application/json", ...CORS },
-      body: JSON.stringify({ error: e.message }),
-    };
+    });
   }
 };
