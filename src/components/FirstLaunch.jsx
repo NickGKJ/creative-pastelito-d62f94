@@ -42,6 +42,7 @@ export default function FirstLaunch() {
   const [pin1, setPin1] = useState('');
   const [pin2, setPin2] = useState('');
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const handlePin1Next = () => {
     if (pin1.length < 4) { setError('Please enter all 4 digits.'); return; }
@@ -57,8 +58,15 @@ export default function FirstLaunch() {
       return;
     }
     setError('');
-    await setSetting('adminPin', pin1);
-    await actions.completeFirstLaunch();
+    setSaving(true);
+    try {
+      await setSetting('adminPin', pin1);
+      await actions.completeFirstLaunch();
+    } catch (err) {
+      console.error('First launch setup failed:', err);
+      setSaving(false);
+      setError('Setup failed. Please check your connection and try again.');
+    }
   };
 
   return (
@@ -119,16 +127,16 @@ export default function FirstLaunch() {
             </div>
             {error && <p style={{ color: 'var(--admin-danger)', fontSize: '0.85rem', fontWeight: 700, marginTop: 8 }}>{error}</p>}
             <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-              <button className="btn btn-ghost" onClick={() => { setStep('pin1'); setPin2(''); setError(''); }}>
+              <button className="btn btn-ghost" disabled={saving} onClick={() => { setStep('pin1'); setPin2(''); setError(''); }}>
                 Back
               </button>
               <button
                 className="btn btn-primary btn-lg"
                 style={{ flex: 1 }}
                 onClick={handleConfirm}
-                disabled={pin2.length < 4}
+                disabled={pin2.length < 4 || saving}
               >
-                Save &amp; Continue
+                {saving ? 'Setting up…' : 'Save & Continue'}
               </button>
             </div>
           </>
