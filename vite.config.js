@@ -49,6 +49,16 @@ export default defineConfig({
               cacheName: 'gstatic-fonts-cache',
               expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 }
             }
+          },
+          // Cache images and audio served by the Netlify file function.
+          // Files are immutable (same id = same content) so cache forever.
+          {
+            urlPattern: /\/\.netlify\/functions\/file\?/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'netlify-files-cache',
+              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 365 }
+            }
           }
         ]
       }

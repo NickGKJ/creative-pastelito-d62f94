@@ -1,9 +1,9 @@
-import React, { createContext, useContext, useReducer, useEffect } from 'react';
-import { getCategories, getSetting, setSetting, initDefaults } from './db';
+import React, { createContext, useContext, useReducer, useEffect, useRef } from 'react';
+import { getCategories, subscribeToCategories, getSetting, setSetting, initDefaults } from './db';
 
 // ── State shape ───────────────────────────────────────────────────────────────
 const initialState = {
-  view: 'loading',          // 'loading' | 'firstLaunch' | 'child' | 'pinEntry' | 'admin'
+  view: 'loading',          // 'loading' | 'firstLaunch' | 'child' | 'admin'
   categories: [],
   currentCategoryId: null,
   displaySize: 'medium',    // 'small' | 'medium' | 'large'
@@ -47,12 +47,13 @@ const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const unsubCatsRef = useRef(null);
 
+  // ── Boot ─────────────────────────────────────────────────────────────────────
   useEffect(() => {
     async function init() {
       const pin = await getSetting('adminPin');
       if (!pin) {
-        // First launch — no defaults yet
         dispatch({ type: 'INIT', view: 'firstLaunch', categories: [], displaySize: 'medium' });
         return;
       }
@@ -62,11 +63,28 @@ export function AppProvider({ children }) {
       dispatch({ type: 'INIT', view: 'child', categories, displaySize });
     }
     init();
+    return () => { unsubCatsRef.current?.(); };
   }, []);
 
+  // ── Real-time category sync ───────────────────────────────────────────────────
+  // Starts once the app has initialised (past first-launch or normal boot).
+  // Any device that adds, renames, reorders, or deletes a category instantly
+  // pushes that change to every other open device.
+  useEffect(() => {
+    if (!state.isInitialised || state.view === 'firstLaunch') return;
+    unsubCatsRef.current?.(); // cancel any previous listener
+    unsubCatsRef.current = subscribeToCategories(categories => {
+      dispatch({ type: 'SET_CATEGORIES', categories });
+    });
+    return () => { unsubCatsRef.current?.(); };
+  }, [state.isInitialised, state.view]);
+
+  // ── Actions ───────────────────────────────────────────────────────────────────
   const actions = {
     setView: (view) => dispatch({ type: 'SET_VIEW', view }),
 
+    // refreshCategories is kept for compatibility but the live listener
+    // makes manual refreshes unnecessary in most cases.
     refreshCategories: async () => {
       const categories = await getCategories();
       dispatch({ type: 'SET_CATEGORIES', categories });

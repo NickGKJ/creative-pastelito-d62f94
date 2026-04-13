@@ -1,125 +1,200 @@
-import { firestoreDb, storage } from './firebase';
-import {
-  collection, doc, getDocs, addDoc, updateDoc, deleteDoc,
-  setDoc, getDoc, query, where, writeBatch,
-} from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+// All data is stored in Netlify Blobs via three serverless functions:
+//   /.netlify/functions/api    — JSON CRUD (categories, items, settings)
+//   /.netlify/functions/upload — binary file upload
+//   /.netlify/functions/file   — binary file serve
+//
+// Cross-device sync is achieved by polling every 10 seconds.
+// Any change made on one device will appear on all other devices
+// within 10 seconds without a page refresh.
 
 export const DEFAULT_CATEGORIES = [
-  { name: 'Food', emoji: '🍎' },
-  { name: 'Play', emoji: '🎮' },
+  { name: 'Food',     emoji: '🍎' },
+  { name: 'Play',     emoji: '🎮' },
   { name: 'Feelings', emoji: '😊' },
-  { name: 'People', emoji: '👨‍👩‍👧' },
-  { name: 'Places', emoji: '🏠' },
+  { name: 'People',   emoji: '👨‍👩‍👧' },
+  { name: 'Places',   emoji: '🏠' },
 ];
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Low-level helpers ──────────────────────────────────────────────────────────
 
-async function uploadBlob(path, blob) {
-  const storageRef = ref(storage, path);
-  await uploadBytes(storageRef, blob);
-  return getDownloadURL(storageRef);
+async function apiGet(resource, params = {}) {
+  const url = new URL('/.netlify/functions/api', location.origin);
+  url.searchParams.set('resource', resource);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`GET ${resource} failed (${res.status})`);
+  return res.json();
 }
 
-async function tryDeleteStorageFile(path) {
-  try { await deleteObject(ref(storage, path)); } catch { /* file may not exist */ }
+async function apiPost(resource, body, params = {}) {
+  const url = new URL('/.netlify/functions/api', location.origin);
+  url.searchParams.set('resource', resource);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`POST ${resource} failed (${res.status})`);
+  return res.json();
 }
 
-// ── Categories ────────────────────────────────────────────────────────────────
+// Uploads a Blob; returns the URL that will serve it.
+// If id is provided the upload overwrites the existing file at that id.
+async function uploadFile(blob, id) {
+  const url = new URL('/.netlify/functions/upload', location.origin);
+  if (id) url.searchParams.set('id', id);
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'X-File-Type': blob.type || 'application/octet-stream' },
+    body: blob,
+  });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+  const { url: fileUrl } = await res.json();
+  return fileUrl;
+}
+
+async function deleteFile(id) {
+  if (!id) return;
+  const url = new URL('/.netlify/functions/upload', location.origin);
+  url.searchParams.set('id', id);
+  await fetch(url, { method: 'DELETE' }).catch(() => {});
+}
+
+// ── Categories ─────────────────────────────────────────────────────────────────
 
 export async function getCategories() {
-  const snap = await getDocs(collection(firestoreDb, 'categories'));
-  const cats = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  return cats.sort((a, b) => a.order - b.order);
+  const cats = await apiGet('categories');
+  return Array.isArray(cats) ? cats.sort((a, b) => a.order - b.order) : [];
+}
+
+// Calls callback immediately then every 10 seconds.
+// Returns an unsubscribe function — matches the Firebase onSnapshot interface
+// so AppContext / ChildView don't need to change.
+export function subscribeToCategories(callback) {
+  let cancelled = false;
+
+  async function poll() {
+    if (cancelled) return;
+    try {
+      callback(await getCategories());
+    } catch (e) {
+      console.warn('subscribeToCategories:', e.message);
+    }
+    if (!cancelled) setTimeout(poll, 10_000);
+  }
+
+  poll();
+  return () => { cancelled = true; };
 }
 
 export async function addCategory({ name, emoji }) {
   const existing = await getCategories();
-  const maxOrder = existing.length > 0 ? Math.max(...existing.map(c => c.order)) + 1 : 0;
-  const data = { name, emoji, order: maxOrder, createdAt: Date.now() };
-  const docRef = await addDoc(collection(firestoreDb, 'categories'), data);
-  return { id: docRef.id, ...data };
+  const order = existing.length
+    ? Math.max(...existing.map(c => c.order)) + 1
+    : 0;
+  const cat = { id: crypto.randomUUID(), name, emoji, order, createdAt: Date.now() };
+  await apiPost('categories', [...existing, cat]);
+  return cat;
 }
 
 export async function updateCategory(category) {
-  const { id, ...data } = category;
-  await updateDoc(doc(firestoreDb, 'categories', id), data);
+  const existing = await getCategories();
+  const updated = existing.map(c => c.id === category.id ? { ...c, ...category } : c);
+  await apiPost('categories', updated);
 }
 
 export async function deleteCategory(id) {
+  // Delete all files belonging to this category's items first
   const items = await getItemsByCategory(id);
-  const batch = writeBatch(firestoreDb);
-  for (const item of items) {
-    await tryDeleteStorageFile(`items/${item.id}/image`);
-    await tryDeleteStorageFile(`items/${item.id}/audio`);
-    batch.delete(doc(firestoreDb, 'items', item.id));
-  }
-  batch.delete(doc(firestoreDb, 'categories', id));
-  await batch.commit();
+  await Promise.all(items.flatMap(item => [
+    deleteFile(`img-${item.id}`),
+    deleteFile(`aud-${item.id}`),
+  ]));
+  // Clear the items list for this category
+  await apiPost('items', [], { categoryId: id });
+  // Remove from categories list
+  const existing = await getCategories();
+  await apiPost('categories', existing.filter(c => c.id !== id));
 }
 
 export async function reorderCategories(orderedIds) {
-  const batch = writeBatch(firestoreDb);
-  orderedIds.forEach((id, index) => {
-    batch.update(doc(firestoreDb, 'categories', id), { order: index });
-  });
-  await batch.commit();
+  const existing = await getCategories();
+  const map = Object.fromEntries(existing.map(c => [c.id, c]));
+  const reordered = orderedIds
+    .map((id, index) => map[id] ? { ...map[id], order: index } : null)
+    .filter(Boolean);
+  await apiPost('categories', reordered);
 }
 
-// ── Items ─────────────────────────────────────────────────────────────────────
-// Items stored in Firestore with imageUrl / audioUrl (Firebase Storage download URLs)
-// instead of blobs. Blobs are uploaded to Storage on add/update.
+// ── Items ──────────────────────────────────────────────────────────────────────
 
 export async function getItemsByCategory(categoryId) {
-  const q = query(collection(firestoreDb, 'items'), where('categoryId', '==', categoryId));
-  const snap = await getDocs(q);
-  const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  return items.sort((a, b) => a.createdAt - b.createdAt);
+  const items = await apiGet('items', { categoryId });
+  return Array.isArray(items) ? items.sort((a, b) => a.createdAt - b.createdAt) : [];
+}
+
+// Calls callback immediately then every 10 seconds.
+// Returns an unsubscribe function.
+export function subscribeToItems(categoryId, callback) {
+  let cancelled = false;
+
+  async function poll() {
+    if (cancelled) return;
+    try {
+      callback(await getItemsByCategory(categoryId));
+    } catch (e) {
+      console.warn('subscribeToItems:', e.message);
+    }
+    if (!cancelled) setTimeout(poll, 10_000);
+  }
+
+  poll();
+  return () => { cancelled = true; };
 }
 
 export async function addItem({ categoryId, label, imageBlob, audioBlob }) {
   const id = crypto.randomUUID();
   const [imageUrl, audioUrl] = await Promise.all([
-    imageBlob ? uploadBlob(`items/${id}/image`, imageBlob) : Promise.resolve(null),
-    audioBlob ? uploadBlob(`items/${id}/audio`, audioBlob) : Promise.resolve(null),
+    imageBlob ? uploadFile(imageBlob, `img-${id}`) : Promise.resolve(null),
+    audioBlob ? uploadFile(audioBlob, `aud-${id}`) : Promise.resolve(null),
   ]);
-  const data = { categoryId, label, imageUrl, audioUrl, createdAt: Date.now() };
-  await setDoc(doc(firestoreDb, 'items', id), data);
-  return { id, ...data };
+  const item = { id, categoryId, label, imageUrl, audioUrl, createdAt: Date.now() };
+  const existing = await getItemsByCategory(categoryId);
+  await apiPost('items', [...existing, item], { categoryId });
+  return item;
 }
 
-// Pass newImageBlob / newAudioBlob if the user has chosen a replacement file.
-// Leave them undefined to keep the existing URLs.
 export async function updateItem(item, { newImageBlob, newAudioBlob } = {}) {
-  const { id, ...data } = item;
-  if (newImageBlob) {
-    data.imageUrl = await uploadBlob(`items/${id}/image`, newImageBlob);
-  }
-  if (newAudioBlob) {
-    data.audioUrl = await uploadBlob(`items/${id}/audio`, newAudioBlob);
-  }
-  await updateDoc(doc(firestoreDb, 'items', id), data);
-  return { id, ...data };
+  const { id, categoryId } = item;
+  let { imageUrl, audioUrl } = item;
+  // Overwrite the file at the same stable ID so old URL keeps working
+  // (browser and CDN already have it cached; new upload replaces server copy)
+  if (newImageBlob) imageUrl = await uploadFile(newImageBlob, `img-${id}`);
+  if (newAudioBlob) audioUrl = await uploadFile(newAudioBlob, `aud-${id}`);
+  const updated = { ...item, imageUrl, audioUrl };
+  const existing = await getItemsByCategory(categoryId);
+  await apiPost('items', existing.map(i => i.id === id ? updated : i), { categoryId });
+  return updated;
 }
 
-export async function deleteItem(id) {
-  await tryDeleteStorageFile(`items/${id}/image`);
-  await tryDeleteStorageFile(`items/${id}/audio`);
-  await deleteDoc(doc(firestoreDb, 'items', id));
+// categoryId is required so we can update the right items list in the store.
+export async function deleteItem(id, categoryId) {
+  await Promise.all([deleteFile(`img-${id}`), deleteFile(`aud-${id}`)]);
+  const existing = await getItemsByCategory(categoryId);
+  await apiPost('items', existing.filter(i => i.id !== id), { categoryId });
 }
 
-// ── Settings ──────────────────────────────────────────────────────────────────
-// adminPin is stored locally (localStorage) — intentionally not synced so each
-// device can have its own PIN protecting the admin screen.
-// All other settings sync via Firestore.
-// iWantAudio value is a Storage download URL string (not a Blob).
+// ── Settings ───────────────────────────────────────────────────────────────────
 
 export async function getSetting(key) {
-  if (key === 'adminPin') {
-    return localStorage.getItem('adminPin') ?? null;
+  // Admin PIN stays on-device only (security credential, not synced)
+  if (key === 'adminPin') return localStorage.getItem('adminPin') ?? null;
+  try {
+    return await apiGet('setting', { key });
+  } catch {
+    return null;
   }
-  const snap = await getDoc(doc(firestoreDb, 'settings', key));
-  return snap.exists() ? snap.data().value : null;
 }
 
 export async function setSetting(key, value) {
@@ -127,16 +202,15 @@ export async function setSetting(key, value) {
     localStorage.setItem('adminPin', value);
     return;
   }
-  // iWantAudio is saved as a Blob — upload to Storage, store URL
   if (key === 'iWantAudio' && value instanceof Blob) {
-    const url = await uploadBlob('settings/iWantAudio', value);
-    await setDoc(doc(firestoreDb, 'settings', 'iWantAudio'), { value: url });
+    const url = await uploadFile(value, 'setting-iWantAudio');
+    await apiPost('setting', { value: url }, { key });
     return;
   }
-  await setDoc(doc(firestoreDb, 'settings', key), { value });
+  await apiPost('setting', { value }, { key });
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// ── Init ───────────────────────────────────────────────────────────────────────
 
 export async function initDefaults() {
   const existing = await getCategories();

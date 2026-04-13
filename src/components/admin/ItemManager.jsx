@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { getItemsByCategory, addItem, updateItem, deleteItem } from '../../db';
+import { subscribeToItems, addItem, updateItem, deleteItem } from '../../db';
 import AudioRecorder from './AudioRecorder';
 import ConfirmDialog from '../ConfirmDialog';
 
-// ── Item card in the grid ─────────────────────────────────────────────────────
+// ── Item card in the admin grid ───────────────────────────────────────────────
 function ItemCard({ item, onEdit, onDelete }) {
   return (
     <div className="item-card">
@@ -24,20 +24,45 @@ function ItemCard({ item, onEdit, onDelete }) {
   );
 }
 
+// Compress an image to ≤ 1024px and 85% JPEG quality before uploading.
+// Keeps file size well within Netlify's 6 MB function body limit.
+async function compressImage(file) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const MAX = 1024;
+      let { width, height } = img;
+      if (width > MAX || height > MAX) {
+        if (width >= height) { height = Math.round(height * MAX / width); width = MAX; }
+        else                 { width  = Math.round(width  * MAX / height); height = MAX; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      canvas.toBlob(resolve, 'image/jpeg', 0.85);
+    };
+    img.onerror = () => resolve(file); // fallback: use original
+    img.src = objectUrl;
+  });
+}
+
 // ── Item editor sheet ─────────────────────────────────────────────────────────
 function ItemEditor({ item, categoryId, onSave, onClose }) {
   const [label, setLabel] = useState(item?.label ?? '');
-  // Existing URLs from the saved item
-  const [existingImageUrl] = useState(item?.imageUrl ?? null);
+  // Existing Firebase Storage URLs (cleared if user replaces them)
+  const [existingImageUrl, setExistingImageUrl] = useState(item?.imageUrl ?? null);
   const [existingAudioUrl, setExistingAudioUrl] = useState(item?.audioUrl ?? null);
-  // New blobs chosen by the user this session
+  // New blobs chosen this session (uploaded on Save)
   const [newImageBlob, setNewImageBlob] = useState(null);
   const [newAudioBlob, setNewAudioBlob] = useState(null);
   const [imgPreview, setImgPreview] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  // Preview URL for a newly selected image blob
+  // Local preview URL for a newly picked image
   useEffect(() => {
     if (!newImageBlob) { setImgPreview(null); return; }
     const url = URL.createObjectURL(newImageBlob);
@@ -45,20 +70,18 @@ function ItemEditor({ item, categoryId, onSave, onClose }) {
     return () => URL.revokeObjectURL(url);
   }, [newImageBlob]);
 
-  const handleImageFile = (e) => {
+  const handleImageFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setError('Please choose an image file.');
-      return;
-    }
+    if (!file.type.startsWith('image/')) { setError('Please choose an image file.'); return; }
     setError('');
-    setNewImageBlob(file);
+    const compressed = await compressImage(file);
+    setNewImageBlob(compressed);
   };
 
   const handleAudioChange = (blob) => {
     setNewAudioBlob(blob);
-    if (blob) setExistingAudioUrl(null); // replaced
+    if (blob) setExistingAudioUrl(null);
   };
 
   const handleSave = async () => {
@@ -77,14 +100,13 @@ function ItemEditor({ item, categoryId, onSave, onClose }) {
         await addItem({ categoryId, label: label.trim(), imageBlob: newImageBlob, audioBlob: newAudioBlob });
       }
       onSave();
-    } catch (e) {
-      setError('Failed to save. Please try again.');
+    } catch {
+      setError('Failed to save. Check your connection and try again.');
     } finally {
       setSaving(false);
     }
   };
 
-  // What to show in the image area
   const shownImageSrc = imgPreview || existingImageUrl;
 
   return (
@@ -110,11 +132,8 @@ function ItemEditor({ item, categoryId, onSave, onClose }) {
             <input type="file" accept="image/*" onChange={handleImageFile} />
           </div>
           {shownImageSrc && (
-            <button
-              className="btn btn-ghost btn-sm"
-              style={{ marginTop: 6 }}
-              onClick={() => { setNewImageBlob(null); }}
-            >
+            <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }}
+              onClick={() => { setNewImageBlob(null); setExistingImageUrl(null); }}>
               Replace image
             </button>
           )}
@@ -134,7 +153,7 @@ function ItemEditor({ item, categoryId, onSave, onClose }) {
           />
         </div>
 
-        {/* Audio — show existing saved audio OR the recorder for new audio */}
+        {/* Audio */}
         <div className="form-group">
           {existingAudioUrl && !newAudioBlob ? (
             <div className="audio-recorder">
@@ -164,15 +183,8 @@ function ItemEditor({ item, categoryId, onSave, onClose }) {
         )}
 
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn btn-ghost" onClick={onClose} style={{ flex: 1 }}>
-            Cancel
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleSave}
-            disabled={saving}
-            style={{ flex: 2 }}
-          >
+          <button className="btn btn-ghost" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving} style={{ flex: 2 }}>
             {saving ? 'Uploading…' : (item ? 'Save Changes' : 'Add Item')}
           </button>
         </div>
@@ -187,29 +199,21 @@ export default function ItemManager({ category, onBack }) {
   const [editingItem, setEditingItem] = useState(undefined); // undefined=closed, null=new, obj=edit
   const [deletingItem, setDeletingItem] = useState(null);
 
-  const load = async () => {
-    const data = await getItemsByCategory(category.id);
-    setItems(data);
-  };
+  // Real-time subscription — items update on all devices as soon as any change is made
+  useEffect(() => {
+    return subscribeToItems(category.id, setItems);
+  }, [category.id]);
 
-  useEffect(() => { load(); }, [category.id]);
-
-  const handleSave = () => {
-    setEditingItem(undefined);
-    load();
-  };
+  const handleSave = () => setEditingItem(undefined);
 
   const handleDeleteConfirm = async () => {
-    await deleteItem(deletingItem.id);
+    await deleteItem(deletingItem.id, deletingItem.categoryId);
     setDeletingItem(null);
-    load();
   };
 
   return (
     <div>
-      <button className="back-btn btn" onClick={onBack}>
-        ← Back to Categories
-      </button>
+      <button className="back-btn btn" onClick={onBack}>← Back to Categories</button>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <div>
@@ -221,9 +225,7 @@ export default function ItemManager({ category, onBack }) {
             {items.length} {items.length === 1 ? 'item' : 'items'}
           </span>
         </div>
-        <button className="btn btn-primary" onClick={() => setEditingItem(null)}>
-          + Add Item
-        </button>
+        <button className="btn btn-primary" onClick={() => setEditingItem(null)}>+ Add Item</button>
       </div>
 
       {items.length === 0 ? (
@@ -234,19 +236,12 @@ export default function ItemManager({ category, onBack }) {
         }}>
           <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>📭</div>
           <p style={{ fontWeight: 700, marginBottom: 8 }}>No items yet</p>
-          <p style={{ fontSize: '0.85rem' }}>
-            Tap "Add Item" to add an image, label, and audio clip.
-          </p>
+          <p style={{ fontSize: '0.85rem' }}>Tap "Add Item" to add an image, label, and audio clip.</p>
         </div>
       ) : (
         <div className="item-grid">
           {items.map(item => (
-            <ItemCard
-              key={item.id}
-              item={item}
-              onEdit={setEditingItem}
-              onDelete={setDeletingItem}
-            />
+            <ItemCard key={item.id} item={item} onEdit={setEditingItem} onDelete={setDeletingItem} />
           ))}
         </div>
       )}

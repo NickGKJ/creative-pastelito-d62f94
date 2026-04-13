@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '../AppContext';
-import { getItemsByCategory, getSetting } from '../db';
+import { subscribeToItems, getSetting } from '../db';
 import { useLongPress } from '../hooks/useLongPress';
 
 const TAB_COLORS = [
@@ -9,18 +9,21 @@ const TAB_COLORS = [
 ];
 
 // ── Single image card ─────────────────────────────────────────────────────────
-function ImageCard({ item, size }) {
+function ImageCard({ item }) {
   const [tapped, setTapped] = useState(false);
   const [audioError, setAudioError] = useState(false);
   const audioRef = useRef(null);
 
+  // Pre-load audio from the Firebase Storage URL so the first tap is instant.
   useEffect(() => {
+    setAudioError(false);
     if (!item.audioUrl) { setAudioError(true); return; }
     const audio = new Audio(item.audioUrl);
     audio.preload = 'auto';
+    audio.load();
     audio.onerror = () => setAudioError(true);
     audioRef.current = audio;
-    return () => { audio.pause(); };
+    return () => { audio.pause(); audioRef.current = null; };
   }, [item.audioUrl]);
 
   const handleTap = () => {
@@ -63,8 +66,9 @@ function IWantButton({ audioUrl, onRequestAdmin }) {
     if (!audioUrl) return;
     const audio = new Audio(audioUrl);
     audio.preload = 'auto';
+    audio.load();
     audioRef.current = audio;
-    return () => { audio.pause(); };
+    return () => { audio.pause(); audioRef.current = null; };
   }, [audioUrl]);
 
   const handlePress = () => {
@@ -86,7 +90,7 @@ function IWantButton({ audioUrl, onRequestAdmin }) {
         <span className="i-want-hand">🙋</span>
         <span className="i-want-text">I Want</span>
       </button>
-      {/* Invisible long-press zone in top-right corner for admin access */}
+      {/* Invisible long-press zone — hold 2 s to open admin */}
       <div
         className={`admin-trigger-corner ${pressing ? 'pressing' : ''}`}
         {...handlers}
@@ -132,9 +136,10 @@ export default function ChildView({ onRequestAdmin }) {
   const [items, setItems] = useState([]);
   const [iWantAudioUrl, setIWantAudioUrl] = useState(null);
 
+  // Real-time item sync — updates instantly when admin adds/edits on any device
   useEffect(() => {
     if (!currentCategoryId) return;
-    getItemsByCategory(currentCategoryId).then(setItems);
+    return subscribeToItems(currentCategoryId, setItems);
   }, [currentCategoryId]);
 
   useEffect(() => {
@@ -147,15 +152,15 @@ export default function ChildView({ onRequestAdmin }) {
 
   return (
     <div className="child-view">
-      {/* I Want button — always visible at top */}
-      <IWantButton audioUrl={iWantAudioUrl} onRequestAdmin={onRequestAdmin} />
-
-      {/* Category tabs — always visible directly below I Want */}
+      {/* Category tabs — top of screen */}
       <CategoryTabs
         categories={categories}
         currentId={currentCategoryId}
         onSelect={handleSelectCategory}
       />
+
+      {/* I Want button — below tabs */}
+      <IWantButton audioUrl={iWantAudioUrl} onRequestAdmin={onRequestAdmin} />
 
       {/* Scrollable image grid */}
       <div className="child-grid-area" role="main">
@@ -167,7 +172,7 @@ export default function ChildView({ onRequestAdmin }) {
         ) : (
           <div className={`child-grid size-${displaySize}`}>
             {items.map(item => (
-              <ImageCard key={item.id} item={item} size={displaySize} />
+              <ImageCard key={item.id} item={item} />
             ))}
           </div>
         )}

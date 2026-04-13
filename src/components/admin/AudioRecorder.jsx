@@ -52,10 +52,12 @@ export default function AudioRecorder({ audioBlob, onChange }) {
   // Compute duration when we have a blob
   useEffect(() => {
     if (!audioBlob) { setDuration(0); return; }
-    const audio = new Audio(URL.createObjectURL(audioBlob));
+    const url = URL.createObjectURL(audioBlob);
+    const audio = new Audio(url);
     audio.addEventListener('loadedmetadata', () => {
       if (isFinite(audio.duration)) setDuration(audio.duration);
     });
+    return () => URL.revokeObjectURL(url);
   }, [audioBlob]);
 
   const startRecording = async () => {

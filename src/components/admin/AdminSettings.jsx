@@ -16,9 +16,8 @@ export default function AdminSettings() {
   const [newPin, setNewPin] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  // Saved audio URL from Firestore (shown when no new recording pending)
+  // Firebase Storage URL for the saved "I Want" audio
   const [savedAudioUrl, setSavedAudioUrl] = useState(null);
-  // New blob recorded/uploaded this session (not yet saved)
   const [pendingAudioBlob, setPendingAudioBlob] = useState(null);
   const [iWantSaved, setIWantSaved] = useState(false);
   const [iWantSaving, setIWantSaving] = useState(false);
@@ -30,7 +29,7 @@ export default function AdminSettings() {
   const handleAudioChange = (blob) => {
     setPendingAudioBlob(blob);
     setIWantSaved(false);
-    if (blob) setSavedAudioUrl(null); // replaced
+    if (blob) setSavedAudioUrl(null);
   };
 
   const handleSaveIWantAudio = async () => {
@@ -38,8 +37,8 @@ export default function AdminSettings() {
     setIWantSaving(true);
     try {
       await setSetting('iWantAudio', pendingAudioBlob);
-      const newUrl = await getSetting('iWantAudio');
-      setSavedAudioUrl(newUrl);
+      const url = await getSetting('iWantAudio');
+      setSavedAudioUrl(url);
       setPendingAudioBlob(null);
       setIWantSaved(true);
       setTimeout(() => setIWantSaved(false), 3000);
@@ -69,7 +68,6 @@ export default function AdminSettings() {
             Record yourself saying <strong>"I want…"</strong> so the button plays your voice when your child taps it.
           </p>
 
-          {/* Show saved audio URL if no pending blob */}
           {savedAudioUrl && !pendingAudioBlob ? (
             <div className="audio-recorder">
               <div className="audio-duration">
@@ -128,7 +126,7 @@ export default function AdminSettings() {
         <div style={{ padding: '16px 20px' }}>
           <p style={{ fontSize: '0.85rem', color: 'var(--admin-text-secondary)', marginBottom: 16, lineHeight: 1.5 }}>
             The PIN protects Admin from being accidentally accessed by your child.
-            Each device has its own PIN.
+            Each device has its own PIN stored locally.
           </p>
           {successMsg && (
             <p style={{ color: 'var(--admin-success)', fontWeight: 700, fontSize: '0.9rem', marginBottom: 12 }}>
@@ -147,7 +145,7 @@ export default function AdminSettings() {
         <div style={{ padding: '16px 20px' }}>
           <p style={{ fontSize: '0.85rem', color: 'var(--admin-text-secondary)', lineHeight: 1.6 }}>
             <strong>AAC App</strong> — Augmentative and Alternative Communication<br />
-            Version 2.0 · Cloud-synced via Firebase · Content shared across all devices.
+            Changes sync across all devices in real time via Firebase.
           </p>
           <p style={{ fontSize: '0.8rem', color: 'var(--admin-text-secondary)', marginTop: 10, lineHeight: 1.5 }}>
             Access Admin from child view: hold the small dot in the top-right corner of "I Want" for 2 seconds.
