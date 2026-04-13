@@ -3,11 +3,12 @@ import { getCategories, subscribeToCategories, getSetting, setSetting, initDefau
 
 // ── State shape ───────────────────────────────────────────────────────────────
 const initialState = {
-  view: 'loading',          // 'loading' | 'firstLaunch' | 'child' | 'admin'
+  view: 'loading',          // 'loading' | 'firstLaunch' | 'child' | 'pinEntry' | 'admin' | 'error'
   categories: [],
   currentCategoryId: null,
   displaySize: 'medium',    // 'small' | 'medium' | 'large'
   isInitialised: false,
+  error: null,
 };
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
@@ -37,6 +38,8 @@ function reducer(state, action) {
       return { ...state, currentCategoryId: action.id };
     case 'SET_DISPLAY_SIZE':
       return { ...state, displaySize: action.size };
+    case 'INIT_ERROR':
+      return { ...state, view: 'error', error: action.error, isInitialised: true };
     default:
       return state;
   }
@@ -52,15 +55,21 @@ export function AppProvider({ children }) {
   // ── Boot ─────────────────────────────────────────────────────────────────────
   useEffect(() => {
     async function init() {
-      const pin = await getSetting('adminPin');
-      if (!pin) {
-        dispatch({ type: 'INIT', view: 'firstLaunch', categories: [], displaySize: 'medium' });
-        return;
+      try {
+        const pin = await getSetting('adminPin');
+        if (!pin) {
+          // First launch — no defaults yet
+          dispatch({ type: 'INIT', view: 'firstLaunch', categories: [], displaySize: 'medium' });
+          return;
+        }
+        await initDefaults();
+        const categories = await getCategories();
+        const displaySize = (await getSetting('displaySize')) ?? 'medium';
+        dispatch({ type: 'INIT', view: 'child', categories, displaySize });
+      } catch (err) {
+        console.error('App init failed:', err);
+        dispatch({ type: 'INIT_ERROR', error: err.message });
       }
-      await initDefaults();
-      const categories = await getCategories();
-      const displaySize = (await getSetting('displaySize')) ?? 'medium';
-      dispatch({ type: 'INIT', view: 'child', categories, displaySize });
     }
     init();
     return () => { unsubCatsRef.current?.(); };
