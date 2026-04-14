@@ -8,14 +8,16 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, DELETE, OPTIONS",
 };
 
-export default async (req) => {
+export default async (req, context) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS });
   }
 
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
-  const store = getStore(STORE);
+
+  // Pass context so Blobs can authenticate automatically
+  const store = getStore({ name: STORE, context });
 
   try {
     // ── Upload ────────────────────────────────────────────────────────────────
@@ -25,16 +27,15 @@ export default async (req) => {
 
       // Client sends { data: base64String, type: mimeType }
       const { data, type } = await req.json();
+
+      // Strip codec params e.g. audio/webm;codecs=opus → audio/webm
       const contentType = (type || "application/octet-stream").split(";")[0];
 
-      // Decode base64 → Uint8Array → ArrayBuffer
-      const binary = atob(data);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
+      // Decode base64 → ArrayBuffer using Node's Buffer
+      const buf = Buffer.from(data, "base64");
+      const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 
-      await store.set(fileId, bytes.buffer, { metadata: { contentType } });
+      await store.set(fileId, arrayBuffer, { metadata: { contentType } });
 
       return new Response(
         JSON.stringify({
@@ -47,7 +48,7 @@ export default async (req) => {
 
     // ── Delete ────────────────────────────────────────────────────────────────
     if (req.method === "DELETE" && id) {
-      try { await store.delete(id); } catch { /* already gone */ }
+      try { await store.delete(id); } catch (_e) { /* already gone */ }
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...CORS },

@@ -1,7 +1,7 @@
 // Serves binary files (images + audio) stored by upload.js.
 import { getStore } from "@netlify/blobs";
 
-export default async (req) => {
+export default async (req, context) => {
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
 
@@ -9,7 +9,8 @@ export default async (req) => {
     return new Response("Missing id parameter", { status: 400 });
   }
 
-  const store = getStore("aac-files");
+  // Pass context so Blobs can authenticate automatically
+  const store = getStore({ name: "aac-files", context });
 
   try {
     const result = await store.getWithMetadata(id, { type: "arrayBuffer" });

@@ -22,17 +22,18 @@ function err(status, msg) {
   });
 }
 
-export default async (req) => {
+export default async (req, context) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS });
   }
 
   const url = new URL(req.url);
-  const resource  = url.searchParams.get("resource");
+  const resource   = url.searchParams.get("resource");
   const categoryId = url.searchParams.get("categoryId");
-  const key       = url.searchParams.get("key");
+  const key        = url.searchParams.get("key");
 
-  const store = getStore(STORE);
+  // Pass context so Blobs can authenticate automatically
+  const store = getStore({ name: STORE, context });
 
   try {
     // ── GET ───────────────────────────────────────────────────────────────────
