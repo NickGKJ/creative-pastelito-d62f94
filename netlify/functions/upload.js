@@ -1,10 +1,10 @@
-// Binary file upload — stores files in Netlify Blobs, returns a serve URL.
+// Binary file upload — receives base64 JSON, stores in Netlify Blobs, returns serve URL.
 import { getStore } from "@netlify/blobs";
 
 const STORE = "aac-files";
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type, X-File-Type",
+  "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Allow-Methods": "POST, DELETE, OPTIONS",
 };
 
@@ -22,11 +22,19 @@ export default async (req) => {
     if (req.method === "POST") {
       const fileId =
         id || `f-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const contentType =
-        req.headers.get("x-file-type") || "application/octet-stream";
 
-      const buf = await req.arrayBuffer();
-      await store.set(fileId, buf, { metadata: { contentType } });
+      // Client sends { data: base64String, type: mimeType }
+      const { data, type } = await req.json();
+      const contentType = (type || "application/octet-stream").split(";")[0];
+
+      // Decode base64 → Uint8Array → ArrayBuffer
+      const binary = atob(data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+
+      await store.set(fileId, bytes.buffer, { metadata: { contentType } });
 
       return new Response(
         JSON.stringify({

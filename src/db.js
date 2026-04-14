@@ -39,15 +39,30 @@ async function apiPost(resource, body, params = {}) {
   return res.json();
 }
 
-// Uploads a Blob; returns the URL that will serve it.
+// Converts a Blob to a base64 string for reliable binary transfer.
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+// Uploads a Blob as base64 JSON; returns the URL that will serve it.
+// Base64 JSON avoids binary request body corruption in Netlify Functions.
 // If id is provided the upload overwrites the existing file at that id.
 async function uploadFile(blob, id) {
   const url = new URL('/.netlify/functions/upload', location.origin);
   if (id) url.searchParams.set('id', id);
+  // Strip codec params (e.g. audio/webm;codecs=opus → audio/webm) so the
+  // stored Content-Type is recognised by all browsers.
+  const fileType = (blob.type || 'application/octet-stream').split(';')[0];
+  const data = await blobToBase64(blob);
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'X-File-Type': blob.type || 'application/octet-stream' },
-    body: blob,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data, type: fileType }),
   });
   if (!res.ok) throw new Error(`Upload failed (${res.status})`);
   const { url: fileUrl } = await res.json();
