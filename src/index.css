@@ -16,6 +16,14 @@ html, body, #root {
   background: var(--child-bg);
 }
 
+/* Respect iPad/iPhone safe areas (notch, home bar, rounded corners) */
+.child-view, .admin-view, .first-launch, .loading-screen {
+  padding-left:   env(safe-area-inset-left);
+  padding-right:  env(safe-area-inset-right);
+  padding-top:    env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
 button {
   font-family: inherit;
   cursor: pointer;

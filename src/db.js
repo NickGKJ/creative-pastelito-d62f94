@@ -92,7 +92,10 @@ export function subscribeToCategories(callback) {
   async function poll() {
     if (cancelled) return;
     try {
-      callback(await getCategories());
+      const result = await getCategories();
+      // Check again after the async fetch — prevents stale data overwriting
+      // a newer subscription that started while this fetch was in-flight.
+      if (!cancelled) callback(result);
     } catch (e) {
       console.warn('subscribeToCategories:', e.message);
     }
@@ -157,7 +160,10 @@ export function subscribeToItems(categoryId, callback) {
   async function poll() {
     if (cancelled) return;
     try {
-      callback(await getItemsByCategory(categoryId));
+      const result = await getItemsByCategory(categoryId);
+      // Check again after the async fetch — prevents a slow fetch for a
+      // previously-selected category from overwriting the current category's items.
+      if (!cancelled) callback(result);
     } catch (e) {
       console.warn('subscribeToItems:', e.message);
     }
