@@ -1,10 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 function getSupportedMimeType() {
+  // audio/mp4 is supported by both Safari/iOS and Chrome, and plays on all devices.
+  // audio/webm is NOT supported by Safari/iOS — so we avoid it unless there's no alternative.
   const types = [
+    'audio/mp4',
+    'audio/mp4;codecs=mp4a.40.2',
     'audio/webm;codecs=opus',
     'audio/webm',
-    'audio/mp4',
     'audio/ogg;codecs=opus',
     'audio/ogg',
   ];
@@ -75,7 +78,9 @@ export default function AudioRecorder({ audioBlob, onChange }) {
       };
 
       mr.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mimeType || 'audio/webm' });
+        // Strip codec params from type so blob.type is clean (e.g. audio/mp4 not audio/mp4;codecs=...)
+        const baseType = (mimeType || 'audio/mp4').split(';')[0];
+        const blob = new Blob(chunksRef.current, { type: baseType });
         onChange(blob);
         setState('done');
         stream.getTracks().forEach(t => t.stop());
