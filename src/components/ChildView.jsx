@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../AppContext';
 import { subscribeToItems, getSetting } from '../db';
 import { useLongPress } from '../hooks/useLongPress';
@@ -12,24 +12,13 @@ const TAB_COLORS = [
 function ImageCard({ item }) {
   const [tapped, setTapped] = useState(false);
   const [audioError, setAudioError] = useState(false);
-  const audioRef = useRef(null);
 
-  // Pre-load audio from the Firebase Storage URL so the first tap is instant.
-  useEffect(() => {
-    setAudioError(false);
-    if (!item.audioUrl) { setAudioError(true); return; }
-    const audio = new Audio(item.audioUrl);
-    audio.preload = 'auto';
-    audio.load();
-    audio.onerror = () => setAudioError(true);
-    audioRef.current = audio;
-    return () => { audio.pause(); audioRef.current = null; };
-  }, [item.audioUrl]);
-
+  // On iOS Safari, audio MUST be created and played inside a user-gesture handler.
+  // Preloading outside of a gesture causes silent playback failure on iPhone/iPad.
   const handleTap = () => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(() => setAudioError(true));
+    if (item.audioUrl) {
+      const audio = new Audio(item.audioUrl);
+      audio.play().catch(() => setAudioError(true));
     }
     setTapped(true);
     setTimeout(() => setTapped(false), 350);
@@ -59,22 +48,13 @@ function ImageCard({ item }) {
 // ── I Want button ─────────────────────────────────────────────────────────────
 function IWantButton({ audioUrl, onRequestAdmin }) {
   const [active, setActive] = useState(false);
-  const audioRef = useRef(null);
   const { pressing, handlers } = useLongPress(onRequestAdmin, 2000);
 
-  useEffect(() => {
-    if (!audioUrl) return;
-    const audio = new Audio(audioUrl);
-    audio.preload = 'auto';
-    audio.load();
-    audioRef.current = audio;
-    return () => { audio.pause(); audioRef.current = null; };
-  }, [audioUrl]);
-
   const handlePress = () => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(() => {});
+    // Create and play inside the gesture handler — required for iOS Safari
+    if (audioUrl) {
+      const audio = new Audio(audioUrl);
+      audio.play().catch(() => {});
     }
     setActive(true);
     setTimeout(() => setActive(false), 400);
