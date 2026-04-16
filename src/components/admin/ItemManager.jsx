@@ -52,7 +52,7 @@ async function compressImage(file) {
 // ── Item editor sheet ─────────────────────────────────────────────────────────
 function ItemEditor({ item, categoryId, onSave, onClose }) {
   const [label, setLabel] = useState(item?.label ?? '');
-  // Existing Firebase Storage URLs (cleared if user replaces them)
+  // Existing Netlify Blobs URLs (cleared if user replaces them)
   const [existingImageUrl, setExistingImageUrl] = useState(item?.imageUrl ?? null);
   const [existingAudioUrl, setExistingAudioUrl] = useState(item?.audioUrl ?? null);
   // New blobs chosen this session (uploaded on Save)

@@ -31,9 +31,12 @@ export default async (req, context) => {
       // Strip codec params e.g. audio/webm;codecs=opus → audio/webm
       const contentType = (type || "application/octet-stream").split(";")[0];
 
-      // Decode base64 → ArrayBuffer using Node's Buffer
+      // Decode base64 → ArrayBuffer using Node's Buffer.
+      // new Uint8Array(buf).buffer always produces an owned ArrayBuffer that
+      // starts at offset 0 — avoids the byteOffset pitfall of buf.buffer
+      // when Buffer reuses a larger pool allocation.
       const buf = Buffer.from(data, "base64");
-      const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+      const arrayBuffer = new Uint8Array(buf).buffer;
 
       await store.set(fileId, arrayBuffer, { metadata: { contentType } });
 

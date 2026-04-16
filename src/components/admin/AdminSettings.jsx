@@ -16,7 +16,7 @@ export default function AdminSettings() {
   const [newPin, setNewPin] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  // Firebase Storage URL for the saved "I Want" audio
+  // Netlify Blobs URL for the saved "I Want" audio
   const [savedAudioUrl, setSavedAudioUrl] = useState(null);
   const [pendingAudioBlob, setPendingAudioBlob] = useState(null);
   const [iWantSaved, setIWantSaved] = useState(false);
@@ -145,7 +145,7 @@ export default function AdminSettings() {
         <div style={{ padding: '16px 20px' }}>
           <p style={{ fontSize: '0.85rem', color: 'var(--admin-text-secondary)', lineHeight: 1.6 }}>
             <strong>AAC App</strong> — Augmentative and Alternative Communication<br />
-            Changes sync across all devices in real time via Firebase.
+            Changes sync across all devices in real time via Netlify Blobs.
           </p>
           <p style={{ fontSize: '0.8rem', color: 'var(--admin-text-secondary)', marginTop: 10, lineHeight: 1.5 }}>
             Access Admin from child view: hold the small dot in the top-right corner of "I Want" for 2 seconds.

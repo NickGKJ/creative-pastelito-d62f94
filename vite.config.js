@@ -19,9 +19,16 @@ export default defineConfig({
         start_url: '/',
         icons: [
           {
+            src: 'icons/icon.svg',
+            sizes: 'any',
+            type: 'image/svg+xml',
+            purpose: 'any'
+          },
+          {
             src: 'icons/icon-192.png',
             sizes: '192x192',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any'
           },
           {
             src: 'icons/icon-512.png',
@@ -51,13 +58,16 @@ export default defineConfig({
             }
           },
           // Cache images and audio served by the Netlify file function.
-          // Files are immutable (same id = same content) so cache forever.
+          // NetworkFirst so that fixes to a bad upload propagate immediately;
+          // falls back to cache when offline. CacheFirst + 1-year TTL would
+          // permanently cache any wrong content-type response.
           {
             urlPattern: /\/\.netlify\/functions\/file\?/,
-            handler: 'CacheFirst',
+            handler: 'NetworkFirst',
             options: {
               cacheName: 'netlify-files-cache',
-              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 365 }
+              networkTimeoutSeconds: 10,
+              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 }
             }
           }
         ]

@@ -78,9 +78,23 @@ export default function AudioRecorder({ audioBlob, onChange }) {
       };
 
       mr.onstop = () => {
+        // Guard against empty recordings (user stops immediately after starting)
+        if (chunksRef.current.length === 0) {
+          stream.getTracks().forEach(t => t.stop());
+          setState('idle');
+          setError('Recording was too short. Please try again.');
+          return;
+        }
         // Strip codec params from type so blob.type is clean (e.g. audio/mp4 not audio/mp4;codecs=...)
         const baseType = (mimeType || 'audio/mp4').split(';')[0];
         const blob = new Blob(chunksRef.current, { type: baseType });
+        // Extra guard: if total size is 0, reject it
+        if (blob.size === 0) {
+          stream.getTracks().forEach(t => t.stop());
+          setState('idle');
+          setError('Recording was empty. Please try again.');
+          return;
+        }
         onChange(blob);
         setState('done');
         stream.getTracks().forEach(t => t.stop());
